@@ -165,19 +165,20 @@ clone_repo() {
     log_info "Cloning Athena (branch: $BRANCH)..."
     mkdir -p "$(dirname "$INSTALL_DIR")"
     # THE 08-17 SUBFOLDER CLONE (the repo layout fix): the repo root is
-    # README + LICENSE + athena-system/. The clone must extract the
-    # athena-system/ SUBFOLDER into INSTALL_DIR — never the repo root
-    # (a root clone would nest athena-system/athena-system/ and break
-    # the requirements path). Sparse checkout does exactly that.
+    # README + LICENSE + athena-system/. The clone is a normal depth-1
+    # clone (small — a few hundred files), then the athena-system/
+    # subfolder is MOVED UP so the code lands DIRECTLY in INSTALL_DIR
+    # (never nested — a nested athena-system/athena-system/ would break
+    # the requirements path). Sparse checkout proved unreliable under
+    # `bash <(curl ...)` (the subfolder never populated), so a plain
+    # clone + move is the robust path.
     _clone_ok=false
     if GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=5" \
-        git clone --depth 1 --branch "$BRANCH" \
-        --filter=blob:none --sparse "$REPO_URL_SSH" "$INSTALL_DIR" 2>/dev/null; then
+        git clone --depth 1 --branch "$BRANCH" "$REPO_URL_SSH" "$INSTALL_DIR" 2>/dev/null; then
         _clone_ok=true
     else
         rm -rf "$INSTALL_DIR" 2>/dev/null
-        if git clone --depth 1 --branch "$BRANCH" \
-            --filter=blob:none --sparse "$REPO_URL_HTTPS" "$INSTALL_DIR"; then
+        if git clone --depth 1 --branch "$BRANCH" "$REPO_URL_HTTPS" "$INSTALL_DIR"; then
             _clone_ok=true
         else
             log_error "Failed to clone repository"
@@ -185,16 +186,14 @@ clone_repo() {
         fi
     fi
     if [ "$_clone_ok" = true ]; then
-        # THE SUBFOLDER EXTRACT: the repo root is README + LICENSE +
-        # athena-system/. Move the athena-system/ subfolder up so the
-        # code lands DIRECTLY in INSTALL_DIR (never nested).
+        # Move the athena-system/ subfolder up into INSTALL_DIR.
         if [ -d "$INSTALL_DIR/athena-system" ]; then
             _tmp="$(dirname "$INSTALL_DIR")/.athena-code-$$"
             mv "$INSTALL_DIR/athena-system" "$_tmp" 2>/dev/null || true
             rm -rf "$INSTALL_DIR" 2>/dev/null || true
             mv "$_tmp" "$INSTALL_DIR" 2>/dev/null || true
-            # Drop the .git the sparse clone left (the installed copy
-            # doesn't need it — a future install pulls from the repo).
+            # Drop the .git the clone left (the installed copy doesn't
+            # need it — a future install pulls from the repo).
             rm -rf "$INSTALL_DIR/.git" 2>/dev/null || true
         fi
         log_success "Cloned via HTTPS"

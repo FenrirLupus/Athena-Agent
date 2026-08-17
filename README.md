@@ -1,6 +1,30 @@
 # Athena-Agent
 Say Hello to Athena! She is an Artificial Intelligence Agent that was Designed in Mind to Mix Intelligence with Wisdom to Enable Her to Learn By Doing instead of Knowing How To Do...
 
+# Install
+The code lives in `athena-system/`. Install it natively into `~/.athena`:
+
+```bash
+git clone https://github.com/FenrirLupus/Athena-Agent.git
+cd Athena-Agent/athena-system
+bash install.sh
+```
+
+Or install directly (clone + setup in one):
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/FenrirLupus/Athena-Agent/main/athena-system/install.sh)
+```
+
+Either way the code ALWAYS lands in `~/.athena/athena-system` (the dumb-install
+rule), the `athena` command is linked, and the venv is built. Then:
+
+```bash
+athena        # the CLI window
+athena setup  # configure providers
+athena web    # the GUI server
+```
+
 # Release Information
 - Stable: A release that contains minimal bugs and is polished enough to be fully capable and with high durability 
 - Beta:   A release that contains some bugs or has little polish to be slightly capable with medium durability

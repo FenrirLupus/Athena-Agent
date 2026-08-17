@@ -322,7 +322,7 @@ def list_session_ids(profile: str = "") -> list[str]:
 def uuid_session_ids(profile: str = "", limit: int = 0) -> list[str]:
     """The profile's sessions, UUID-named ONLY (the Operator's spec).
 
-    Test debris / internal sessions (roles, toolcols, nurse-*, …) never
+    TEST DEBRIS / INTERNAL sessions (roles, toolcols, nurse-*, …) never
     appear in the UI — the dropdown lists only real UUID sessions that
     exist within the selected profile.
     """
@@ -333,6 +333,42 @@ def uuid_session_ids(profile: str = "", limit: int = 0) -> list[str]:
     ids = [sid for sid in list_session_ids(profile=profile)
            if _uuid.match(sid)]
     return ids[:limit] if limit else ids
+
+
+def find_session_profile(session_id: str, start_profile: str = "") -> str:
+    """THE 08-17 SESSION-OWNER RESOLUTION (the Operator's doctrine): find
+    which PROFILE owns a session file. Profiles are individual — a session
+    may live under any profile's sessions/ dir, and reading it must use
+    that profile, never the loop's default.
+
+    Returns the owning profile name ("" = default/.default) or "" if the
+    session isn't found anywhere.
+    """
+    session_id = (session_id or "").strip()
+    if not session_id:
+        return ""
+    db_cfg = _db_cfg()
+    prefix = db_cfg.get("session_prefix", "session-")
+    # The active-profile preference first (fast path).
+    _start = (start_profile or "").strip()
+    roots_to_try = []
+    if _start and _start not in ("default", ".default"):
+        roots_to_try.append(_start)
+    roots_to_try.append("")
+    try:
+        from intelligence.profiles import list_profiles
+        roots_to_try += [p.name for p in list_profiles()
+                         if p.name and p.name not in roots_to_try]
+    except Exception:
+        pass
+    for prof in roots_to_try:
+        try:
+            _sp = sessions_dir(prof or "") if prof else sessions_dir("")
+            if (_sp / f"{prefix}{session_id}.db").exists():
+                return prof
+        except Exception:
+            continue
+    return ""
 
 
 def session_activity(profile: str = "",
@@ -1456,6 +1492,14 @@ def import_vault_jsonl(jsonl_text: str, profile: str = "") -> int:
         conn.commit()
     finally:
         conn.close()
+    # THE 08-17 INDEX-SYNC (the Operator's spec): the vault changed with an
+    # import — rebuild the table of contents so the agent's index queries
+    # see the new rows immediately (a fresh, accurate TOC, never stale).
+    if imported > 0:
+        try:
+            build_index(profile)
+        except Exception:
+            pass
     return imported
 
 

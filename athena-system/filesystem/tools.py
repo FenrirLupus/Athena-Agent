@@ -764,7 +764,8 @@ def schemas_for_channel(tools: list | None = None,
     return out
 
 
-def execute_tool_call(tool_call: dict, timeout: float = 60.0) -> str:
+def execute_tool_call(tool_call: dict, timeout: float = 60.0,
+                      profile: str = "") -> str:
     """Run ONE tool call. Returns the result string.
 
     THE STANDARDIZED DISPATCH (the Operator's 08-12 spec): skills and
@@ -772,6 +773,14 @@ def execute_tool_call(tool_call: dict, timeout: float = 60.0) -> str:
     resolves to the skill's loader (returns its body + references —
     the knowledge the model applies); a plain tool name resolves to the
     tool. Same schema in, same result-string out.
+
+    THE 08-17 PROFILE-ALIGNMENT (the Operator's doctrine): profiles are
+    INDIVIDUAL, isolated experiences — never a conglomerate. The active
+    profile is AUTO-INJECTED into the tool's arguments whenever a
+    profile-scoped tool (vault_query / vault_semantic / vault_store /
+    memory_*) doesn't already carry one. This guarantees Kali's tools
+    always query HER vault, never the .default's — the LLM's own
+    arguments must never be trusted to name the right profile.
     """
     function = tool_call.get("function", {})
     name = function.get("name", "")
@@ -882,4 +891,12 @@ def execute_tool_call(tool_call: dict, timeout: float = 60.0) -> str:
         return f"error: invalid arguments JSON: {exc}"
     if not isinstance(args, dict):
         return "error: arguments must be an object"
+    # THE 08-17 PROFILE-ALIGNMENT: auto-inject the active profile into any
+    # profile-scoped tool that lacks it. The profile-scoped set = the vault
+    # + memory tools (they read/write a profile's private stores).
+    if profile:
+        _profiled = {"vault_query", "vault_semantic", "vault_store",
+                     "memory_add", "memory_list", "memory_read", "memory_del"}
+        if (tool.name in _profiled) and not (args.get("profile") or ""):
+            args["profile"] = str(profile) if str(profile) != "default" else ".default"
     return tool.run(args, timeout=timeout)

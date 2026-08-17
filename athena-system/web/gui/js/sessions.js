@@ -1,5 +1,8 @@
 // ── Sessions (per ACTIVE profile — auto-switches across the site) ────
-let ACTIVE_PROFILE = 'default';
+// THE 08-17 PROFILE FIX: this file must NOT declare its own ACTIVE_PROFILE
+// (it shadowed the shared one with 'default', so the sessions PAGE always
+// fetched the .default profile's sessions regardless of the selected agent).
+// It now reads currentProfile() → the shared, persisted, per-profile choice.
 // REALTIME GUARD: the fingerprint of the last rendered session list — a
 // 3s poll that finds the same state skips the rebuild (no visible churn).
 let SESSIONS_FINGERPRINT = null;

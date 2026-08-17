@@ -111,14 +111,40 @@ def main(profile: Optional[str] = None) -> int:
                   action="boot_integrity")
         print(f"[server] integrity scan skipped: {exc}")
 
-    # INDEX: rebuild the vault table-of-contents at boot — an empty index
-    # silently breaks semantic retrieval (the observed degradation).
+    # INDEX: rebuild EVERY profile's vault table-of-contents at boot — an
+    # empty/stale index silently breaks semantic retrieval (the observed
+    # degradation). THE 08-17 ALL-PROFILE FIX (the Operator's doctrine):
+    # profiles are individual — every profile that HAS a vault must get its
+    # index created/refreshed on startup, not just the active one.
     try:
-        from core.db import build_index
-        idx = build_index(profile or "")
+        from core.db import build_index, connect_vault
+        from intelligence.profiles import list_profiles
+        # The active profile's vault (always built).
+        built = []
+        try:
+            built.append(build_index(profile or "").get("entries", 0))
+        except Exception:
+            pass
+        # Every other profile that has a vault file.
+        for _p in list_profiles():
+            try:
+                _n = _p.name
+                if _n and (_n != (profile or "") and _n != ((profile or "").lstrip("."))):
+                    _vp = connect_vault(_n)
+                    _has = False
+                    try:
+                        _c = _vp.execute(
+                            "SELECT 1 FROM entries LIMIT 1").fetchone()
+                        _has = _c is not None
+                    finally:
+                        _vp.close()
+                    if _has:
+                        built.append(build_index(_n).get("entries", 0))
+            except Exception:
+                pass
         from core.logging import log_event
-        log_event(2, f"index rebuilt at boot: {idx.get('sections', 0)} sections / "
-                     f"{idx.get('entries', 0)} entries",
+        log_event(2, f"index rebuilt at boot: {len(built)} profile vaults "
+                     f"({sum(built)} entries total)",
                   source="db", action="boot_index")
     except Exception as exc:  # noqa: BLE001
         from core.logging import log_event

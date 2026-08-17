@@ -814,8 +814,56 @@ class CLI:
               f"{orange(str(r['checked'] - r['changed']))} already clean")
 
     def cmd_index(self, args: list[str]) -> None:
-        """index rebuild | list | query <category>"""
+        """index rebuild | list | query <category> | import <file.db> | export <file.db>"""
         sub = args[0].lower() if args else "list"
+        if sub == "import":
+            # THE 08-17 VAULT IMPORT (the Operator's spec): copy-first,
+            # universal, strict 1:1 variable match. Export source → JSONL →
+            # import into THIS profile's vault under the current session.
+            if len(args) < 2:
+                print(f"{tag()} usage: {orange('vault import <file.db> [--session <uuid>]')}")
+                return
+            _src = args[1]
+            _sess = None
+            if "--session" in args:
+                _sess = args[args.index("--session") + 1] if len(args) > args.index("--session") + 1 else None
+            from knowledge.vault_transfer import export_to_jsonl, import_jsonl
+            import tempfile, os as _os
+            _tmp = _os.path.join(tempfile.gettempdir(), f"athena-import-{self.profile.name}.jsonl")
+            print(f"{tag()} exporting {orange(_src)} → JSONL...")
+            _er = export_to_jsonl(_src, _tmp)
+            if not _er.get("ok"):
+                print(f"{tag()} export failed: {orange(str(_er.get('error')))}")
+                return
+            print(f"{tag()} exported {_er['exported']} rows (of {_er['rows_read']}) "
+                  f"from table '{orange(_er.get('table_used'))}'")
+            _sess = _sess or str(self.loop and getattr(self.loop, "session_id", "") or "")
+            print(f"{tag()} importing into {orange(self.profile.name)} vault "
+                  f"(session {orange(_sess or 'new UUID')})...")
+            _ir = import_jsonl(_tmp, profile=self.profile.name, session_id=_sess)
+            print(f"{tag()} imported {orange(_ir.get('imported', 0))} rows "
+                  f"({_ir.get('skipped', 0)} skipped) — session {orange(_ir.get('session_id',''))}")
+            print(f"{tag()} copy-first: original vault untouched, added only.")
+            return
+        if sub == "export":
+            if len(args) < 2:
+                print(f"{tag()} usage: {orange('vault export <source.db> [--out <file.jsonl>] [--table <name>]')}")
+                return
+            _src = args[1]
+            _out = None
+            _tbl = None
+            if "--out" in args:
+                _out = args[args.index("--out") + 1]
+            if "--table" in args:
+                _tbl = args[args.index("--table") + 1]
+            from knowledge.vault_transfer import export_to_jsonl
+            _out = _out or _src.rsplit(".", 1)[0] + ".jsonl"
+            _er = export_to_jsonl(_src, _out, table=_tbl or "")
+            print(f"{tag()} exported {_er.get('exported', 0)} rows (of {_er.get('rows_read', 0)}) "
+                  f"→ {orange(_er.get('output',''))}")
+            if not _er.get("ok", True):
+                print(f"{tag()} export failed: {orange(str(_er.get('error')))}")
+            return
         if sub == "rebuild":
             result = db_layer.build_index(profile=self.profile.name)
             print(f"{tag()} index rebuilt: {orange(result['sections'])} sections "

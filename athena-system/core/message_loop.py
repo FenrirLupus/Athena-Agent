@@ -48,6 +48,17 @@ class TurnResult:
     reasoning: str | None = None
 
 
+def _resolve_profile_name(loop) -> str:
+    """Resolve the ACTIVE profile name for tool dispatch (the 08-17
+    profile-alignment fix): profiles are individual, isolated — a tool
+    must always target the profile that is actually running."""
+    try:
+        p = getattr(loop, "profile", None)
+        return str(getattr(p, "name", "") or "") if p is not None else ""
+    except Exception:
+        return ""
+
+
 class MessageLoop:
     """One bounded turn: system prompt + history + user message → reply."""
 
@@ -963,7 +974,8 @@ class MessageLoop:
                                         # prompting again.
                                         if _p.get("allowed"):
                                             self._emit("tool", f"{tool_name} {raw_args[:120]}")
-                                            result = tool_registry.execute_tool_call(tc)
+                                            result = tool_registry.execute_tool_call(
+                                                tc, profile=_resolve_profile_name(self))
                                         else:
                                             result = (f"[denied: {tool_name} — "
                                                       f"permission rule]")
@@ -990,13 +1002,16 @@ class MessageLoop:
                                         self._emit("tool", f"{tool_name} [guardrail denied]")
                                     else:
                                         self._emit("tool", f"{tool_name} {raw_args[:120]}")
-                                        result = tool_registry.execute_tool_call(tc)
+                                        result = tool_registry.execute_tool_call(
+                                        tc, profile=_resolve_profile_name(self))
                             else:
                                 self._emit("tool", f"{tool_name} {raw_args[:120]}")
-                                result = tool_registry.execute_tool_call(tc)
+                                result = tool_registry.execute_tool_call(
+                                        tc, profile=_resolve_profile_name(self))
                     except Exception:
                         self._emit("tool", f"{tool_name} {raw_args[:120]}")
-                        result = tool_registry.execute_tool_call(tc)
+                        result = tool_registry.execute_tool_call(
+                                        tc, profile=_resolve_profile_name(self))
                 # EVENTS: log every tool call to the agent activity log
                 # (levels 1-2 ONLY — the curator's learn-by-doing record;
                 # the nurse never watches events, only metrics 3/4/5).

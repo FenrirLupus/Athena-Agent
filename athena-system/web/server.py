@@ -665,11 +665,15 @@ def create_app(*, loop_holder=None, server_holder=None,
             sid = getattr(loop, "session_id", "") or ""
         if not sid:
             sid = db_layer.find_last_session(profile="") or ""
-        profile = ""
-        if loop is not None:
-            profile = getattr(getattr(loop, "profile", None), "name", "") or ""
+        # THE 08-17 SESSION-OWNER RESOLUTION (the Operator's doctrine): a
+        # session may belong to any profile — resolve ITS owner so history
+        # loads from the right profile's store (never the loop's default).
+        prof = getattr(getattr(loop, "profile", None), "name", "") if loop else ""
+        owner = db_layer.find_session_profile(sid, start_profile=prof)
+        if owner:
+            prof = owner
         try:
-            total = db_layer.count_session_messages(sid, profile=profile)
+            total = db_layer.count_session_messages(sid, profile=prof)
             # Page BACKWARD from the newest: get_session_history returns
             # the newest N messages ordered oldest→newest. For offset o,
             # the desired page is the messages [total-o-limit : total-o].
@@ -678,7 +682,7 @@ def create_app(*, loop_holder=None, server_holder=None,
             # `want` rows of that window (oldest-first, correct coverage:
             # page o covers [total-o-limit : total-o], disjoint + complete).
             rows = db_layer.get_session_history(
-                sid, limit=limit + offset, profile=profile)
+                sid, limit=limit + offset, profile=prof)
             want = min(limit, max(0, total - offset))
             page = rows[:want] if want else []
             msgs = []
@@ -1867,15 +1871,33 @@ def create_app(*, loop_holder=None, server_holder=None,
 
     # -- Vault GRID (the Operator's cell-based table: X = columns, Y = rows) -
     @app.get("/vault/table")
-    def vault_table(profile: str = "", limit: int = 500):
-        """All rows of the vault as a grid: columns + rows (cells)."""
+    def vault_table(profile: str = "", limit: int = 500, offset: int = 0):
+        """A PAGE of the vault as a grid: columns + rows (cells).
+
+        THE 08-17 WEBSITE PAGINATION (the Operator's spec): the website
+        vault loads 500 rows per page with a "Load older" button — offset
+        pages further back (older entries), exactly like the chat page.
+        The AGENT's vault_query tool (not this endpoint) sees the FULL
+        vault; the website grid stays paginated for usability.
+        """
         from core import db as db_layer
         conn = db_layer.connect_vault(profile)
         try:
             cols = [r[1] for r in conn.execute("PRAGMA table_info(entries)")]
             rows = conn.execute(
                 f"SELECT {', '.join(cols)} FROM entries WHERE deleted=0"
-                " ORDER BY rowid DESC LIMIT ?", (limit,)).fetchall()
+                " ORDER BY rowid DESC LIMIT ? OFFSET ?",
+                (limit, offset)).fetchall()
+            # THE 08-17 CHRONOLOGICAL ORDER (the Operator's spec): the vault
+            # renders OLDEST→NEWEST top→bottom (like the chat history), the
+            # newest entry at the bottom. The SQL fetches newest-first
+            # (rowid DESC) for paging; REVERSED, each page reads oldest at
+            # the top, newest at the bottom. "Load older" (higher offset)
+            # fetches the page before and PREPENDS it above (the chat
+            # load-more pattern).
+            rows = rows[::-1]
+            total = conn.execute(
+                "SELECT COUNT(*) FROM entries WHERE deleted=0").fetchone()[0]
             data = []
             for row in rows:
                 d = dict(row)
@@ -1884,7 +1906,8 @@ def create_app(*, loop_holder=None, server_holder=None,
                         d[k] = v.decode("utf-8", "replace")
                 data.append(d)
             return {"profile": profile or "default", "columns": cols,
-                    "rows": data}
+                    "rows": data, "offset": offset, "limit": limit,
+                    "total": total}
         finally:
             conn.close()
 
@@ -1905,6 +1928,43 @@ def create_app(*, loop_holder=None, server_holder=None,
             return {"ok": True, "id": entry_id}
         except Exception as exc:
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    @app.post("/vault/import-db")
+    async def vault_import_db(request: Request):
+        """THE 08-17 VAULT IMPORT (the Operator's spec): upload a .db, export
+        it to JSONL (strict 1:1 match), then import into the profile's vault.
+        Copy-first — the source is read-only, never modified; only matching
+        variables cross over; the original vault is never touched."""
+        import tempfile, shutil
+        from knowledge.vault_transfer import export_to_jsonl, import_jsonl
+        from pathlib import Path as _P
+        form = await request.form()
+        up = form.get("file")
+        if up is None:
+            return JSONResponse({"ok": False, "error": "no file in request"}, status_code=400)
+        try:
+            raw = await up.read()
+        except Exception:
+            raw = getattr(up, "file", None).read() if getattr(up, "file", None) else b""
+        if not raw:
+            return JSONResponse({"ok": False, "error": "empty file"}, status_code=400)
+        prof = str(form.get("profile") or "")
+        session = str(form.get("session_id") or "")
+        # Save the upload to a temp .db, export to JSONL, import.
+        tmp_db = _P(tempfile.gettempdir()) / f"athena-upload-{_P(str(getattr(up, 'filename', 'upload') or 'upload')).stem}-{__import__('uuid').uuid4().hex[:8]}.db"
+        try:
+            tmp_db.write_bytes(raw)
+            export_r = export_to_jsonl(str(tmp_db), str(tmp_db.with_suffix('.jsonl')))
+            if not export_r.get("ok"):
+                return JSONResponse({"ok": False, "error": export_r.get("error", "export failed")}, status_code=400)
+            import_r = import_jsonl(str(tmp_db.with_suffix('.jsonl')), profile=prof, session_id=session)
+            return {"ok": True, **import_r, "exported_columns": export_r.get("columns_matched", [])}
+        finally:
+            try:
+                tmp_db.unlink(missing_ok=True)
+                tmp_db.with_suffix('.jsonl').unlink(missing_ok=True)
+            except Exception:
+                pass
 
     @app.put("/vault/row/{row_id}")
     async def vault_row_edit(row_id: str, request: Request):

@@ -2,6 +2,13 @@
 let VAULT_COLS = [];
 let VAULT_ROWS = [];
 let selectedRowId = null;
+// THE 08-17 WEBSITE PAGINATION (the Operator's spec): the vault loads 500
+// per page, newest-first; "Load older" appends the next 500 (like the chat
+// page). The AGENT's vault_query tool sees the FULL vault — only the
+// website grid is paginated. VAULT_OFFSET tracks how far back we've loaded.
+const VAULT_PAGE_SIZE = 500;
+let VAULT_OFFSET = 0;
+let VAULT_TOTAL = 0;   // the total entries (for the load-older pill)
 // REALTIME GUARD: the fingerprint of the last rendered data — a 3s poll
 // that finds the same state skips the re-render (scroll/menus survive).
 let VAULT_FINGERPRINT = null;
@@ -27,8 +34,12 @@ function hideVaultError() {
 async function loadVaultGrid() {
   const prof = currentProfile();
   hideVaultError();
+  // Reset to the newest page on a full reload.
+  VAULT_OFFSET = 0;
+  VAULT_ROWS = [];
+  VAULT_COLS = [];
   try {
-    const res = await fetch('/vault/table?profile=' + encodeURIComponent(prof) + '&limit=500');
+    const res = await fetch('/vault/table?profile=' + encodeURIComponent(prof) + '&limit=' + VAULT_PAGE_SIZE + '&offset=0');
     let d;
     try { d = await res.json(); } catch (e) { d = null; }
     if (!res.ok || !d) {
@@ -36,23 +47,74 @@ async function loadVaultGrid() {
       showVaultError(res.status, detail);
       return;
     }
-    $('vault-profile').textContent = 'profile: ' + (d.profile || prof) + ' · ' + (d.rows || []).length + ' rows';
+    $('vault-profile').textContent = 'profile: ' + (d.profile || prof) + ' · ' + (d.total || 0) + ' rows (page: ' + VAULT_PAGE_SIZE + ')';
     const cols = d.columns || [];
     const rows = d.rows || [];
-    // REALTIME GUARD: re-render only when the data actually changed —
-    // a 3s poll that finds the same state leaves the DOM alone, so
-    // scroll + open menus survive (no visible rebuild flicker).
-    const fp = JSON.stringify(cols) + '|' + JSON.stringify(rows.map(r => r.id));
-    if (fp !== VAULT_FINGERPRINT) {
-      VAULT_COLS = cols;
-      VAULT_ROWS = rows;
-      renderVaultGrid();
-      VAULT_FINGERPRINT = fp;
-    }
+    VAULT_COLS = cols;
+    VAULT_ROWS = rows;
+    VAULT_OFFSET = rows.length;
+    VAULT_TOTAL = d.total || 0;
+    renderVaultGrid();
+    updateVaultLoadOlder(VAULT_TOTAL);
+    VAULT_FINGERPRINT = JSON.stringify(cols) + '|' + JSON.stringify(rows.map(r => r.id));
+    return d.total;
   } catch (e) {
     showVaultError('load', e && e.message ? e.message : String(e));
   }
 }
+
+// THE 08-17 LOAD-OLDER (the vault's previous page of older entries).
+// Mirrors the chat pattern: fetching a higher offset returns the page
+// BEFORE (older); it is PREPENDED above so the vault stays oldest→newest.
+async function loadOlderVault() {
+  const prof = currentProfile();
+  const btn = $('vault-load-older');
+  if (btn) { btn.disabled = true; btn.textContent = 'loading…'; }
+  try {
+    const res = await fetch('/vault/table?profile=' + encodeURIComponent(prof) +
+                            '&limit=' + VAULT_PAGE_SIZE + '&offset=' + VAULT_OFFSET);
+    let d;
+    try { d = await res.json(); } catch (e) { d = null; }
+    if (!res.ok || !d) return;
+    const rows = d.rows || [];
+    if (rows.length === 0) { updateVaultLoadOlder(d.total || 0, true); return; }
+    const seenIds = new Set(VAULT_ROWS.map(r => r.id));
+    const fresh = rows.filter(r => !seenIds.has(r.id));
+    VAULT_ROWS = fresh.concat(VAULT_ROWS);   // PREPEND (older above)
+    VAULT_OFFSET += rows.length;
+    VAULT_TOTAL = d.total || 0;
+    renderVaultGrid();
+    updateVaultLoadOlder(VAULT_TOTAL);
+  } catch (e) { /* ignore */ }
+  finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// THE 08-17 LOAD-OLDER PILL: appears at the TOP of the vault when the user
+// scrolls to the top AND there are older entries (the chat history pattern).
+function updateVaultLoadOlder(total, done) {
+  const wrap = $('vault-load-more-wrap');
+  const headerWrap = $('vault-load-more-at-top');
+  if (!wrap) return;
+  const loaded = VAULT_ROWS.length;
+  const hasOlder = !done && loaded < (total || 0);
+  // The pill only shows when scrolled to the top + older exist.
+  const grid = $('vault-grid');
+  const atTop = !grid || grid.scrollTop <= 2;
+  wrap.style.display = (hasOlder && atTop) ? 'block' : 'none';
+}
+
+// THE 08-17 SCROLL LISTENER: the pill pops when the user reaches the top,
+// exactly like the chat page's load-more pill.
+$('vault-grid')?.addEventListener('scroll', () => {
+  const wrap = $('vault-load-more-wrap');
+  if (!wrap) return;
+  const grid = $('vault-grid');
+  const atTop = !grid || grid.scrollTop <= 2;
+  const hasOlder = VAULT_ROWS.length < (VAULT_TOTAL || 0);
+  wrap.style.display = (atTop && hasOlder) ? 'block' : 'none';
+}, {passive: true});
 
 function renderVaultGrid() {
   const head = $('vault-grid-head');
@@ -215,6 +277,41 @@ async function saveAdd() {
 
 $('vault-add-row').onclick = () => openEditor('add', null);
 $('vault-refresh').onclick = () => loadVaultGrid();
+// THE 08-17 LOAD-OLDER (the next page of older vault entries).
+const vaultOlderBtn = $('vault-load-older');
+if (vaultOlderBtn) vaultOlderBtn.onclick = () => loadOlderVault();
+// THE 08-17 IMPORT BUTTON (the Operator's vault-import spec): pick a .db,
+// upload to /vault/import-db → export→JSONL→import into this profile.
+const importBtn = $('vault-import-db');
+const importFile = $('vault-import-file');
+function currentProfileVault() {
+  try { return (typeof currentProfile === 'function') ? currentProfile() : (window.currentProfile || ''); } catch (e) { return ''; }
+}
+if (importBtn) {
+  importBtn.onclick = () => { if (importFile) importFile.click(); };
+}
+if (importFile) {
+  importFile.onchange = async () => {
+    const f = importFile.files && importFile.files[0];
+    if (!f) return;
+    const fd = new FormData();
+    fd.append('file', f);
+    fd.append('profile', currentProfileVault() || '.default');
+    const ok = confirm('Import "' + f.name + '" into the vault?\n\nCopy-first: only the matching variables (role/content/timestamp→date+time) are imported. Nothing existing is deleted or changed.');
+    if (!ok) { importFile.value = ''; return; }
+    try {
+      const res = await fetch('/vault/import-db', { method: 'POST', body: fd });
+      const d = await res.json();
+      if (d && d.ok) {
+        alert('Import complete:\n  ' + (d.imported || 0) + ' rows imported\n  ' + (d.skipped || 0) + ' skipped\n  profile: ' + (d.profile || '') + '\nCopy-first — original vault untouched.');
+        loadVaultGrid();
+      } else {
+        alert('Import failed: ' + ((d && d.error) || ('HTTP ' + res.status)));
+      }
+    } catch (e) { alert('Import error: ' + e.message); }
+    importFile.value = '';
+  };
+}
 // Close any open row menu when clicking elsewhere.
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.row-menu-wrap')) {

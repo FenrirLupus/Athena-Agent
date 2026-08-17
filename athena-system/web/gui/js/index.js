@@ -89,9 +89,20 @@ $('home-start-input').addEventListener('keydown', (e) => {
 // rewrite — sessions/vault/usage all call it, and without it they
 // crashed at the first line (the 08-12 blank-grid bug).
 function currentProfile() {
+  // THE 08-17 PROFILE SOURCE (the Operator's spec): window.ACTIVE_PROFILE
+  // (from profile.js) is preferred; if not set (e.g. a direct page load),
+  // fall back to the persisted localStorage choice so the page reads the
+  // right profile's data even before the dropdown script runs.
+  try {
+    if (window.ACTIVE_PROFILE) return window.ACTIVE_PROFILE;
+  } catch (e) {}
   if (typeof ACTIVE_PROFILE !== 'undefined' && ACTIVE_PROFILE) {
     return ACTIVE_PROFILE;
   }
+  try {
+    const p = localStorage.getItem('athena_active_profile');
+    if (p) return p;
+  } catch (e) {}
   return 'default';
 }
 
@@ -114,6 +125,17 @@ async function loadSessionDropdown() {
     const list = d.sessions || [];
     const labels = d.labels || {};   // {UUID: Label} — the user's side
     if (!list.includes(cur) && cur) list.unshift(cur);
+    // THE 08-17 EMPTY-STATE FIX (the Operator's spec): when the profile has
+    // NO sessions, the dropdown says "none" — never an empty box.
+    if (list.length === 0) {
+      const noneOpt = document.createElement('option');
+      noneOpt.value = '';
+      noneOpt.textContent = 'none';
+      noneOpt.disabled = true;
+      noneOpt.selected = true;
+      sel.appendChild(noneOpt);
+      sel.value = '';
+    }
     for (const sid of list) {
       const opt = document.createElement('option');
       opt.value = sid;

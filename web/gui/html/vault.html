@@ -1,0 +1,23 @@
+<div class="workspace" id="vault-ws">
+  <div class="ws-head">
+    <h2>Vault</h2>
+    <span class="ws-sub" id="vault-profile"></span>
+    <div class="ws-actions">
+      <button id="vault-add-row">＋ Add Row</button>
+      <button id="vault-refresh">⟳ Refresh</button>
+    </div>
+  </div>
+  <!-- THE VAULT ERROR (the Operator's spec): when the vault fails, the
+       message renders CENTERED on the page body as
+       "Vault Error: {code}" + "{message}". Hidden by default. -->
+  <div id="vault-error" class="vault-error hidden">
+    <div class="vault-error-code" id="vault-error-code">Vault Error</div>
+    <div class="vault-error-msg" id="vault-error-msg"></div>
+  </div>
+  <div id="vault-grid">
+    <table class="vault-table">
+      <thead id="vault-grid-head"></thead>
+      <tbody id="vault-grid-body"></tbody>
+    </table>
+  </div>
+</div>

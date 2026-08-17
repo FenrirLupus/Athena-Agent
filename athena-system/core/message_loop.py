@@ -1199,6 +1199,7 @@ class MessageLoop:
         the same shape as the blocking call — the loop is unchanged.
         """
         import urllib.request
+        import socket as _ssock  # THE 08-17 DEAD-PROVIDER GUARD: socket.timeout
         headers = {
             "Content-Type": "application/json",
             "User-Agent": "Athena/0.1",
@@ -1258,7 +1259,7 @@ class MessageLoop:
         # them entirely → tools never ran + the reply was empty).
         tool_call_fragments: dict[int, dict] = {}
         try:
-            resp = urllib.request.urlopen(req, timeout=120.0)
+            resp = urllib.request.urlopen(req, timeout=30.0)
         except urllib.error.HTTPError as exc:
             # THE 400-BODY CAPTURE (the 08-14 diagnostic fix): surface
             # the relay's exact rejection reason (the streaming path
@@ -1272,8 +1273,33 @@ class MessageLoop:
             log_event(3, f"stream HTTP {exc.code} ({url}): {_body[:200]}",
                       source="providers", tool="provider", action="http_error")
             raise ProviderError(f"HTTP {exc.code}: {_body}") from exc
+        except (_ssock.timeout, TimeoutError, OSError) as exc:
+            # THE 08-17 DEAD-PROVIDER GUARD (the crash fix): the connect
+            # OR the first read stalled past the urlopen timeout — surface
+            # it as a friendly provider error, never a frozen turn.
+            from core.logging import log_event
+            log_event(3, f"stream timeout ({url}): provider unresponsive",
+                      source="providers", tool="provider",
+                      action="stream_timeout")
+            raise ProviderError("HTTP stream timed out: the provider did not "
+                                "respond") from exc
         with resp:
+            # THE 08-17 HARD STREAM DEADLINE (the crash fix): the connect
+            # timeout only bounds the TCP handshake — the SSE BODY read can
+            # block indefinitely when the provider accepts then stalls
+            # (the observed hang: a turn stuck minutes + a service killed).
+            # A deadline bounds the WHOLE read; a stall surfaces as a
+            # friendly provider error, never a frozen turn.
+            import time as _time
+            _deadline = _time.monotonic() + 90.0
             for raw_line in resp:
+                if _time.monotonic() > _deadline:
+                    from core.logging import log_event
+                    log_event(3, f"stream timeout ({url}): no data within 90s",
+                              source="providers", tool="provider",
+                              action="stream_timeout")
+                    raise ProviderError("HTTP stream timed out: the provider "
+                                        "stalled (no data within 90s)")
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line.startswith("data:"):
                     continue

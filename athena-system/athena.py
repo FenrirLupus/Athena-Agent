@@ -351,6 +351,27 @@ def _run_gui(profile: Optional[str] = None, host: str = "",
           f"(GUI at /, MCP at /mcp)")
     print(f"[athena] everything is queued FIFO — oldest first, no races")
     import uvicorn
+    # THE 08-17 STOP-RESILIENCE (the crash fix): when the service is
+    # stopped (SIGTERM/SIGINT), interrupt the ConversationLoop's in-flight
+    # turn BEFORE uvicorn waits for it — a hung provider turn must not
+    # block the graceful shutdown (that was the stop-sigterm timeout →
+    # SIGABRT kill). Signal handlers run on the main thread; the loop's
+    # _interrupt is a thread-safe Event the turn checks per-iteration.
+    try:
+        import signal as _signal
+
+        def _interrupt_turn(_signum, _frame) -> None:
+            try:
+                _lp = holder.loop
+                if _lp is not None and hasattr(_lp, "_interrupt"):
+                    _lp._interrupt.set()
+            except Exception:
+                pass
+
+        _signal.signal(_signal.SIGTERM, _interrupt_turn)
+        _signal.signal(_signal.SIGINT, _interrupt_turn)
+    except Exception:
+        pass
     uvicorn.run(app, host=host, port=port, log_level="warning")
     return 0
 

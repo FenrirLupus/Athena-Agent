@@ -185,14 +185,17 @@ clone_repo() {
         fi
     fi
     if [ "$_clone_ok" = true ]; then
-        (cd "$INSTALL_DIR" && git sparse-checkout set athena-system \
-            && git sparse-checkout reapply >/dev/null 2>&1 || true)
-        # Move the subfolder contents up into INSTALL_DIR (the code root).
+        # THE SUBFOLDER EXTRACT: the repo root is README + LICENSE +
+        # athena-system/. Move the athena-system/ subfolder up so the
+        # code lands DIRECTLY in INSTALL_DIR (never nested).
         if [ -d "$INSTALL_DIR/athena-system" ]; then
             _tmp="$(dirname "$INSTALL_DIR")/.athena-code-$$"
-            mv "$INSTALL_DIR/athena-system" "$_tmp"
-            rm -rf "$INSTALL_DIR" 2>/dev/null
-            mv "$_tmp" "$INSTALL_DIR"
+            mv "$INSTALL_DIR/athena-system" "$_tmp" 2>/dev/null || true
+            rm -rf "$INSTALL_DIR" 2>/dev/null || true
+            mv "$_tmp" "$INSTALL_DIR" 2>/dev/null || true
+            # Drop the .git the sparse clone left (the installed copy
+            # doesn't need it — a future install pulls from the repo).
+            rm -rf "$INSTALL_DIR/.git" 2>/dev/null || true
         fi
         log_success "Cloned via HTTPS"
     fi
